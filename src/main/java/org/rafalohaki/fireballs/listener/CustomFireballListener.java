@@ -1,5 +1,6 @@
 package org.rafalohaki.fireballs.listener;
 
+import org.bukkit.block.Block;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -94,13 +95,8 @@ public class CustomFireballListener implements Listener {
 
         Player player = event.getPlayer();
 
-        // JEŚLI KLIKAMY BLOK Z INVENTORY (np. skrzynka) -> pozwól otworzyć, nie strzelaj
-        if (action == Action.RIGHT_CLICK_BLOCK) {
-            var block = event.getClickedBlock();
-            if (block != null && block.getState() instanceof org.bukkit.inventory.InventoryHolder) {
-                // nie anulujemy eventu, po prostu wychodzimy
-                return;
-            }
+        if (isContainerInteraction(action, event.getClickedBlock())) {
+            return;
         }
 
         // Cancel default interactions tylko dla "normalnych" kliknięć
@@ -136,6 +132,20 @@ public class CustomFireballListener implements Listener {
         }
 
         spawnCustomFireball(player);
+    }
+
+    /**
+     * Checks if the player is interacting with a container block.
+     * Extracted to reduce cognitive complexity of onUseFireCharge.
+     */
+    private boolean isContainerInteraction(Action action, Block clickedBlock) {
+        if (action != Action.RIGHT_CLICK_BLOCK) {
+            return false;
+        }
+        if (clickedBlock == null) {
+            return false;
+        }
+        return clickedBlock.getState() instanceof org.bukkit.inventory.InventoryHolder;
     }
 
     /**
@@ -268,7 +278,7 @@ public class CustomFireballListener implements Listener {
 
     private boolean consumeOneFireCharge(Player player) {
         ItemStack hand = player.getInventory().getItemInMainHand();
-        if (hand != null && hand.getType() == Material.FIRE_CHARGE) {
+        if (hand.getType() == Material.FIRE_CHARGE) {
             int amount = hand.getAmount();
             if (amount <= 1) {
                 player.getInventory().setItemInMainHand(null);

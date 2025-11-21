@@ -28,6 +28,7 @@ import java.util.logging.Level;
 public final class Fireballs extends JavaPlugin {
 
     private CustomFireballListener listener;
+    private PacketListener packetListener;
 
     @Override
     public void onEnable() {
@@ -40,11 +41,8 @@ public final class Fireballs extends JavaPlugin {
         getServer().getPluginManager().registerEvents(listener, this);
 
         // Register packet listener for USE_ITEM packets
-        // Note: We create as local variable since we can't safely unregister due to
-        // classloader conflicts
-        // PacketEvents (external plugin) manages listener lifecycle and cleanup
-        // automatically
-        PacketListener packetListener = new PacketListener() {
+        // Stored field reference allows proper unregistration using asAbstract()
+        packetListener = new PacketListener() {
             @Override
             public void onPacketReceive(PacketReceiveEvent event) {
                 var type = event.getPacketType();
@@ -62,10 +60,13 @@ public final class Fireballs extends JavaPlugin {
                     return;
                 }
 
+                // Extra safety: ensure plugin still enabled before scheduling tasks
+                if (!Fireballs.this.isEnabled()) {
+                    return;
+                }
+
                 event.setCancelled(true);
-                player.getScheduler().run(Fireballs.this, task -> {
-                    listener.attemptFire(player);
-                }, null);
+                player.getScheduler().run(Fireballs.this, task -> listener.attemptFire(player), null);
             }
         };
 
@@ -82,13 +83,10 @@ public final class Fireballs extends JavaPlugin {
         if (listener != null) {
             listener.cleanup();
         }
-        // Note: We intentionally don't unregister the packet listener here.
-        // Attempting to cast between classloaders (our plugin's vs PacketEvents
-        // plugin's)
-        // causes ClassCastException. PacketEvents manages its own lifecycle and will
-        // clean up all listeners when it shuts down. For PlugMan reload compatibility,
-        // the listener is registered with the external PacketEvents plugin which
-        // handles cleanup.
+        if (packetListener != null) {
+            PacketEvents.getAPI().getEventManager().unregisterListener(packetListener.asAbstract(PacketListenerPriority.NORMAL));
+            packetListener = null;
+        }
         getLogger().info("Custom Fireballs plugin disabled.");
     }
 }
