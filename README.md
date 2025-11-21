@@ -120,8 +120,6 @@ Plugin jest w pełni zgodny z modelem wątków Folia:
 - ✅ **Thread-safe cooldowns** - `ConcurrentHashMap`
 - ✅ **Brak długotrwałych referencji** - tylko UUID
 
-📋 Zobacz [FOLIA_CHECKLIST.md](FOLIA_CHECKLIST.md) dla pełnej dokumentacji compliance
-
 ## Licencja
 
 Open source
