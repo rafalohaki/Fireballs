@@ -94,7 +94,16 @@ public class CustomFireballListener implements Listener {
 
         Player player = event.getPlayer();
 
-        // Cancel default interactions
+        // JEŚLI KLIKAMY BLOK Z INVENTORY (np. skrzynka) -> pozwól otworzyć, nie strzelaj
+        if (action == Action.RIGHT_CLICK_BLOCK) {
+            var block = event.getClickedBlock();
+            if (block != null && block.getState() instanceof org.bukkit.inventory.InventoryHolder) {
+                // nie anulujemy eventu, po prostu wychodzimy
+                return;
+            }
+        }
+
+        // Cancel default interactions tylko dla "normalnych" kliknięć
         event.setCancelled(true);
 
         // Check cooldown
