@@ -1,0 +1,19 @@
+# Custom Fireballs Configuration
+
+# Czy kule ognia mają podpalać bloki po eksplozji
+# true = podpala bloki (domyślnie)
+# false = nie podpala bloków
+set-fire: true
+
+# Siła eksplozji (podobna do TNT przy 4.0)
+explosion-power: 4.0
+
+# Czy eksplozja ma niszczyć bloki
+# false = nie niszczy bloków (rekomendowane)
+# true = niszczy bloki
+break-blocks: false
+
+# Cooldown między użyciami (w sekundach)
+# 0 = brak cooldownu
+# Domyślnie: 3 sekundy
+cooldown-seconds: 3
