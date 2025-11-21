@@ -2,7 +2,6 @@ package org.rafalohaki.fireballs;
 
 import com.github.retrooper.packetevents.PacketEvents;
 import com.github.retrooper.packetevents.event.PacketListener;
-import com.github.retrooper.packetevents.event.PacketListenerCommon;
 import com.github.retrooper.packetevents.event.PacketListenerPriority;
 import com.github.retrooper.packetevents.event.PacketReceiveEvent;
 import com.github.retrooper.packetevents.protocol.packettype.PacketType;
@@ -29,19 +28,23 @@ import java.util.logging.Level;
 public final class Fireballs extends JavaPlugin {
 
     private CustomFireballListener listener;
-    private PacketListener packetListener;
 
     @Override
     public void onEnable() {
         // Save default config if not exists
         saveDefaultConfig();
-        
+
         // Register event listener
         // Events in Folia are automatically called on the appropriate region threads
         listener = new CustomFireballListener(this);
         getServer().getPluginManager().registerEvents(listener, this);
 
-        packetListener = new PacketListener() {
+        // Register packet listener for USE_ITEM packets
+        // Note: We create as local variable since we can't safely unregister due to
+        // classloader conflicts
+        // PacketEvents (external plugin) manages listener lifecycle and cleanup
+        // automatically
+        PacketListener packetListener = new PacketListener() {
             @Override
             public void onPacketReceive(PacketReceiveEvent event) {
                 var type = event.getPacketType();
@@ -67,8 +70,6 @@ public final class Fireballs extends JavaPlugin {
         };
 
         PacketEvents.getAPI().getEventManager().registerListener(packetListener, PacketListenerPriority.NORMAL);
-        PacketEvents.getAPI().init();
-
 
         getLogger().info("Custom Fireballs plugin enabled! (Folia 1.21.8+)");
         getLogger().log(Level.INFO, "Set fire: {0}", getConfig().getBoolean("set-fire", true));
@@ -81,10 +82,13 @@ public final class Fireballs extends JavaPlugin {
         if (listener != null) {
             listener.cleanup();
         }
-        if (packetListener != null) {
-            PacketEvents.getAPI().getEventManager().unregisterListener((PacketListenerCommon) packetListener);
-            packetListener = null;
-        }
+        // Note: We intentionally don't unregister the packet listener here.
+        // Attempting to cast between classloaders (our plugin's vs PacketEvents
+        // plugin's)
+        // causes ClassCastException. PacketEvents manages its own lifecycle and will
+        // clean up all listeners when it shuts down. For PlugMan reload compatibility,
+        // the listener is registered with the external PacketEvents plugin which
+        // handles cleanup.
         getLogger().info("Custom Fireballs plugin disabled.");
     }
 }

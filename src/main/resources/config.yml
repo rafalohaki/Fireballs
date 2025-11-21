@@ -17,3 +17,9 @@ break-blocks: false
 # 0 = brak cooldownu
 # Domyślnie: 3 sekundy
 cooldown-seconds: 3
+
+# Maksymalny czas lotu kuli ognia zanim zniknie (w tickach)
+# 20 ticków = 1 sekunda
+# 0 = brak limitu czasu (niezalecane)
+# Domyślnie: 80 ticków (4 sekundy)
+max-flight-ticks: 80

@@ -43,19 +43,20 @@ import java.util.logging.Level;
  * - Cleanup in onDisable prevents memory leaks on reload
  */
 public class CustomFireballListener implements Listener {
-    
+
     private static final String COOLDOWN_SECONDS_CONFIG = "cooldown-seconds";
+    private static final String MAX_FLIGHT_TICKS_CONFIG = "max-flight-ticks";
 
     private final Plugin plugin;
     private final Keys keys;
-    
+
     // Cooldown tracking - ConcurrentHashMap for thread safety on Folia
     // Stores UUID -> timestamp of last use
     private final ConcurrentHashMap<UUID, Long> cooldowns;
 
     // Initial velocity multiplier for the fireball
     private static final double VELOCITY_MULTIPLIER = 1.5;
-    
+
     // Spawn offset distance in front of player (blocks)
     private static final double SPAWN_OFFSET = 1.5;
 
@@ -92,30 +93,30 @@ public class CustomFireballListener implements Listener {
         }
 
         Player player = event.getPlayer();
-        World world = player.getWorld();
 
         // Cancel default interactions
         event.setCancelled(true);
-        
+
         // Check cooldown
         int cooldownSeconds = plugin.getConfig().getInt(COOLDOWN_SECONDS_CONFIG, 3);
         if (cooldownSeconds > 0) {
             UUID playerId = player.getUniqueId();
             long currentTime = System.currentTimeMillis();
-            
+
             // S3824: Use single get() instead of containsKey() + get()
             Long lastUse = cooldowns.get(playerId);
             if (lastUse != null) {
                 long timePassed = currentTime - lastUse;
                 long cooldownMillis = cooldownSeconds * 1000L;
-                
+
                 if (timePassed < cooldownMillis) {
                     long timeLeft = (cooldownMillis - timePassed) / 1000;
-                    player.sendMessage(Component.text("Poczekaj jeszcze " + timeLeft + "s przed następnym użyciem!", NamedTextColor.RED));
+                    player.sendMessage(Component.text("Poczekaj jeszcze " + timeLeft + "s przed następnym użyciem!",
+                            NamedTextColor.RED));
                     return;
                 }
             }
-            
+
             // Always update timestamp after successful use
             cooldowns.put(playerId, currentTime);
         }
@@ -125,26 +126,7 @@ public class CustomFireballListener implements Listener {
             return;
         }
 
-        // Start location - in front of player's eyes to avoid self-damage
-        Location eye = player.getEyeLocation();
-        Vector direction = eye.getDirection().normalize();
-
-        // Offset ~1.5 blocks in front of player
-        eye.add(direction.multiply(SPAWN_OFFSET));
-
-        // Spawn LargeFireball with custom properties
-        world.spawn(eye, LargeFireball.class, fb -> {
-            fb.setShooter(player);              // Assign shooter for knockback/damage attribution
-            fb.setIsIncendiary(false);          // Fireball itself won't ignite blocks
-            fb.setYield(0.0f);                  // Disable default explosion - we'll create custom one
-            fb.setVelocity(direction.multiply(VELOCITY_MULTIPLIER));
-
-            // Tag fireball using PersistentDataContainer
-            // PDC is thread-safe on region threads in Folia
-            PersistentDataContainer pdc = fb.getPersistentDataContainer();
-            NamespacedKey key = keys.customFireballKey();
-            pdc.set(key, PersistentDataType.BYTE, (byte) 1);
-        });
+        spawnCustomFireball(player);
     }
 
     /**
@@ -243,9 +225,11 @@ public class CustomFireballListener implements Listener {
 
     /**
      * Remove expired cooldowns to prevent map from growing indefinitely.
-     * Call this periodically if needed, but PlayerQuitEvent usually handles cleanup.
+     * Call this periodically if needed, but PlayerQuitEvent usually handles
+     * cleanup.
      * 
-     * FOLIA SAFETY: ConcurrentHashMap iterator is weakly consistent and thread-safe.
+     * FOLIA SAFETY: ConcurrentHashMap iterator is weakly consistent and
+     * thread-safe.
      */
     public void removeExpiredCooldowns() {
         int cooldownSeconds = plugin.getConfig().getInt(COOLDOWN_SECONDS_CONFIG, 3);
@@ -304,6 +288,50 @@ public class CustomFireballListener implements Listener {
         return false;
     }
 
+    /**
+     * Spawns a custom fireball with TTL (Time To Live) protection.
+     * Uses EntityScheduler to automatically remove the fireball after
+     * max-flight-ticks.
+     * This prevents fireballs from flying infinitely if they don't hit anything.
+     * 
+     * FOLIA SAFETY: EntityScheduler always runs on the correct region thread for
+     * the entity.
+     * 
+     * @param player The player shooting the fireball
+     */
+    private void spawnCustomFireball(Player player) {
+        Location eye = player.getEyeLocation();
+        Vector direction = eye.getDirection().normalize();
+
+        // Offset spawn position in front of player to avoid self-damage
+        eye.add(direction.multiply(SPAWN_OFFSET));
+
+        World world = player.getWorld();
+        world.spawn(eye, LargeFireball.class, fb -> {
+            fb.setShooter(player); // Assign shooter for damage/knockback attribution
+            fb.setIsIncendiary(false); // Fireball itself won't ignite blocks
+            fb.setYield(0.0f); // Disable default explosion
+            fb.setVelocity(direction.multiply(VELOCITY_MULTIPLIER));
+
+            // Tag fireball using PersistentDataContainer
+            PersistentDataContainer pdc = fb.getPersistentDataContainer();
+            NamespacedKey key = keys.customFireballKey();
+            pdc.set(key, PersistentDataType.BYTE, (byte) 1);
+
+            // TTL protection - auto-remove after max flight time
+            int maxFlightTicks = plugin.getConfig().getInt(MAX_FLIGHT_TICKS_CONFIG, 80);
+            if (maxFlightTicks > 0) {
+                // EntityScheduler is Folia-safe: always runs on entity's region thread
+                fb.getScheduler().runDelayed(plugin, task -> {
+                    // Double-check: only remove if still alive and still our custom fireball
+                    if (!fb.isDead() && fb.isValid() && pdc.has(key, PersistentDataType.BYTE)) {
+                        fb.remove();
+                    }
+                }, null, maxFlightTicks);
+            }
+        });
+    }
+
     public void attemptFire(Player player) {
         int cooldownSeconds = plugin.getConfig().getInt(COOLDOWN_SECONDS_CONFIG, 3);
         if (cooldownSeconds > 0) {
@@ -315,7 +343,8 @@ public class CustomFireballListener implements Listener {
                 long cooldownMillis = cooldownSeconds * 1000L;
                 if (timePassed < cooldownMillis) {
                     long timeLeft = (cooldownMillis - timePassed) / 1000;
-                    player.sendMessage(Component.text("Poczekaj jeszcze " + timeLeft + "s przed następnym użyciem!", NamedTextColor.RED));
+                    player.sendMessage(Component.text("Poczekaj jeszcze " + timeLeft + "s przed następnym użyciem!",
+                            NamedTextColor.RED));
                     return;
                 }
             }
@@ -327,18 +356,6 @@ public class CustomFireballListener implements Listener {
             return;
         }
 
-        Location eye = player.getEyeLocation();
-        Vector direction = eye.getDirection().normalize();
-        eye.add(direction.multiply(SPAWN_OFFSET));
-        World world = player.getWorld();
-        world.spawn(eye, LargeFireball.class, fb -> {
-            fb.setShooter(player);
-            fb.setIsIncendiary(false);
-            fb.setYield(0.0f);
-            fb.setVelocity(direction.multiply(VELOCITY_MULTIPLIER));
-            PersistentDataContainer pdc = fb.getPersistentDataContainer();
-            NamespacedKey key = keys.customFireballKey();
-            pdc.set(key, PersistentDataType.BYTE, (byte) 1);
-        });
+        spawnCustomFireball(player);
     }
 }
