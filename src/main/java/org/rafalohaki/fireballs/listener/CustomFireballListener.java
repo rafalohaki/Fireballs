@@ -76,7 +76,8 @@ public class CustomFireballListener implements Listener {
     private volatile boolean renameEnabled;
 
     // Custom name for Fire Charge items (parsed from MiniMessage)
-    // Note: volatile is sufficient because Component is immutable - only reference assignment needs visibility
+    // S3077 suppressed: Component is immutable, volatile ensures visibility of reference assignment
+    @SuppressWarnings("java:S3077")
     private volatile Component customFireballName;
 
     // Cached explosion config values (read once, not on every explosion)

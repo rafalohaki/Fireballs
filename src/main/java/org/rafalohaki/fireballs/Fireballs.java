@@ -55,8 +55,9 @@ public final class Fireballs extends JavaPlugin {
                     return;
                 }
 
+                // getItemInMainHand() never returns null in Paper/Folia API - returns AIR if empty
                 ItemStack hand = player.getInventory().getItemInMainHand();
-                if (hand == null || hand.getType() != Material.FIRE_CHARGE) {
+                if (hand.getType() != Material.FIRE_CHARGE) {
                     return;
                 }
 

@@ -1,125 +1,71 @@
-# Custom Fireballs Plugin
+# 🔥 Custom Fireballs
 
-Plugin dla Folia 1.21.8+ umożliwiający tworzenie kustomowych kul ognia bez niszczenia bloków.
+**Folia 1.21.8+ Plugin** - Strzelaj kustomowymi kulami ognia z Fire Charge!
 
-## Funkcje
+## 🎯 Jak używać
 
-- ✅ **System oparty na eventach** - brak ciągłego skanowania, wszystko działa na eventach
-- ✅ **Thread-safe na Folia** - wszystkie operacje wykonywane na właściwych wątkach regionów
-- ✅ **PersistentDataContainer** - bezpieczne tagowanie kul ognia
-- ✅ **Kustomowe eksplozje** - knockback i damage z konfigurowalnymi efektami
-- ✅ **Konfiguracja** - podpalanie bloków, siła eksplozji, niszczenie bloków i cooldown
-- ✅ **Cooldown system** - zapobiega spamowaniu kul ognia (ConcurrentHashMap dla Folia)
+1. Weź **Fire Charge** do ręki
+2. Kliknij prawym przyciskiem myszy
+3. Wystrzel kule ognia z konfigurowalną eksplozją
 
-## Jak używać
-
-1. Weź `STICK` (Stick/Pałka) do ręki
-2. Kliknij prawym przyciskiem myszy (działa w powietrzu i na blokach)
-3. Kula ognia zostanie wystrzelona przed tobą
-4. Po trafieniu w cel/blok - eksplozja z konfigurowalnymi efektami
-
-**Uwaga:** Używamy `STICK` jako trigger item, ponieważ niezawodnie wysyła RIGHT_CLICK_AIR events z dowolnej odległości.
-
-**Domyślnie:** Eksplozja podpala bloki, ale ich nie niszczy
-
-**Cooldown:** Jeśli spróbujesz użyć zbyt szybko, otrzymasz czerwony komunikat: *"Poczekaj jeszcze Xs przed następnym użyciem!"*
-
-## Techniczne szczegóły
-
-### Architektura
-
-Plugin wykorzystuje:
-- `PlayerInteractEvent` - do wykrywania użycia Stick (działa w powietrzu)
-- `ProjectileHitEvent` - do obsługi kolizji kuli
-- `ExplosionPrimeEvent` - do blokowania domyślnej eksplozji
-- `PersistentDataContainer` - do tagowania kul ognia
-
-### Thread Safety w Folia
-
-Wszystkie eventy są automatycznie wywoływane na wątkach regionów, które posiadają:
-- Gracza (PlayerInteractEvent)
-- Encję (ProjectileHitEvent, ExplosionPrimeEvent)
-
-Dlatego nie trzeba ręcznie przełączać schedulerów dla typowego event-handlu.
-
-**Cooldown tracking:** Używamy `ConcurrentHashMap<UUID, Long>` dla thread-safe zarządzania cooldownami w środowisku wielowątkowym Folia.
-
-## Konfiguracja
-
-Plik: `config.yml`
+## ⚙️ Konfiguracja
 
 ```yaml
-# Czy kule ognia mają podpalać bloki po eksplozji
-set-fire: true          # domyślnie: true (włączone)
+# Siła eksplozji (TNT = 4.0)
+explosion-power: 4.0
 
-# Siła eksplozji (podobna do TNT przy 4.0)
-explosion-power: 4.0    # domyślnie: 4.0
+# Czy podpalać bloki
+set-fire: true
 
-# Czy eksplozja ma niszczyć bloki  
-break-blocks: false     # domyślnie: false (wyłączone)
+# Czy niszczyć bloki
+break-blocks: false
 
-# Cooldown między użyciami (w sekundach)
-# 0 = brak cooldownu
-cooldown-seconds: 3     # domyślnie: 3 sekundy
+# Cooldown (sekundy)
+cooldown-seconds: 3
+
+# Auto-zmiana nazwy Fire Charge → "Fireball"
+rename-fire-charge: true
+custom-name: "<gold>Fireball</gold>"
 ```
 
-**Ustawienia domyślne:**
-- ✅ Podpalanie bloków: **WŁĄCZONE**
-- ✅ Siła eksplozji: **4.0** (jak TNT)
-- ❌ Niszczenie bloków: **WYŁĄCZONE**
-- ⏱️ Cooldown: **3 sekundy**
+## 🚀 Funkcje
 
-### Parametry stałe
+- ✅ **Event-based system** - zero lagu, brak ciągłego skanowania
+- ✅ **Thread-safe na Folia** - wszystkie operacje na właściwych wątkach
+- ✅ **Auto-rename** - Fire Charge automatycznie zmienia nazwę na "Fireball"
+- ✅ **Konfigurowalne eksplozje** - siła, podpalanie, niszczenie bloków
+- ✅ **Cooldown system** - zapobiega spamowaniu
+- ✅ **Optimized performance** - cached config, zero I/O w runtime
 
-```java
-VELOCITY_MULTIPLIER = 1.5       // Prędkość początkowa kuli
-SPAWN_OFFSET = 1.5              // Odległość spawnu przed graczem (bloki)
-```
+## 📋 Wymagania
 
-## Kompilacja
+- **Java 21**
+- **Folia 1.21.8+**
+- **PacketEvents 2.10.1+**
 
-```bash
-mvnd clean package
-```
+## 📦 Instalacja
 
-Wynikowy JAR: `target/Fireballs-1.0-SNAPSHOT.jar`
+1. Pobierz `Fireballs-1.0-SNAPSHOT.jar`
+2. Umieść w `plugins/`
+3. Zrestartuj serwer
+4. Skonfiguruj `plugins/Fireballs/config.yml`
 
-## Wymagania
+## 🔧 Auto-rename system
 
-- Java 21
-- Folia 1.21.8+ (Paper API)
-- Maven (preferowany mvnd)
+Fire Charge automatycznie zmienia nazwę na "Fireball" gdy:
+- 🛠️ **Skraftujesz** je
+- 📦 **Podniesiesz** z ziemi  
+- 🎒 **Otworzysz** skrzynię
+- 🔄 **Przesuniesz** w ekwipunku
 
-## plugin.yml
+## 🛡️ Thread Safety
 
-```yaml
-folia-supported: true
-```
+Plugin jest w 100% kompatybilny z Folia:
+- Brak `BukkitScheduler`
+- `folia-supported: true`
+- `ConcurrentHashMap` dla cooldownów
+- Memory leak prevention
 
-Ta flaga jest **wymagana** - bez niej Folia nie załaduje pluginu.
+## 📄 Licencja
 
-## Struktura projektu
-
-```
-src/main/java/org/rafalohaki/fireballs/
-├── Fireballs.java                          # Główna klasa pluginu
-├── Keys.java                               # Helper dla PersistentDataContainer
-└── listener/
-    └── CustomFireballListener.java        # Event handler
-```
-
-## Zgodność z Folia
-
-Plugin jest w pełni zgodny z modelem wątków Folia:
-- ✅ Brak użycia `BukkitScheduler`
-- ✅ Brak założenia "głównego wątku"
-- ✅ Wszystkie operacje na właściwych wątkach regionów
-- ✅ `folia-supported: true` w plugin.yml
-- ✅ **Memory leak prevention** - cleanup w `onDisable()`
-- ✅ **Auto-cleanup** - `PlayerQuitEvent` usuwa cooldowny
-- ✅ **Thread-safe cooldowns** - `ConcurrentHashMap`
-- ✅ **Brak długotrwałych referencji** - tylko UUID
-
-## Licencja
-
-Open source
+[MIT](LICENSE)
