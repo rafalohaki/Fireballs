@@ -7,7 +7,6 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.World;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
-import org.bukkit.entity.Explosive;
 import org.bukkit.entity.LargeFireball;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
@@ -61,15 +60,19 @@ public class CustomFireballListener implements Listener {
     // Spawn offset distance in front of player (blocks)
     private static final double SPAWN_OFFSET = 1.5;
 
+    // Cooldown time in milliseconds (cached from config)
+    private volatile long cooldownMillis;
+
     public CustomFireballListener(Plugin plugin) {
         this.plugin = plugin;
         this.keys = new Keys(plugin);
         this.cooldowns = new ConcurrentHashMap<>();
+        this.cooldownMillis = plugin.getConfig().getInt(COOLDOWN_SECONDS_CONFIG, 3) * 1000L;
     }
 
     /**
-     * Handles STICK usage to spawn custom fireballs.
-     * STICK is used as trigger because it triggers RIGHT_CLICK_AIR events reliably.
+     * Handles FIRE_CHARGE usage to spawn custom fireballs.
+     * This is a fallback handler - primary handling is via PacketEvents USE_ITEM.
      * Event runs on region thread - safe to access player/world directly.
      */
     @EventHandler(ignoreCancelled = true, priority = EventPriority.HIGH)
@@ -102,28 +105,9 @@ public class CustomFireballListener implements Listener {
         // Cancel default interactions tylko dla "normalnych" kliknięć
         event.setCancelled(true);
 
-        // Check cooldown
-        int cooldownSeconds = plugin.getConfig().getInt(COOLDOWN_SECONDS_CONFIG, 3);
-        if (cooldownSeconds > 0) {
-            UUID playerId = player.getUniqueId();
-            long currentTime = System.currentTimeMillis();
-
-            // S3824: Use single get() instead of containsKey() + get()
-            Long lastUse = cooldowns.get(playerId);
-            if (lastUse != null) {
-                long timePassed = currentTime - lastUse;
-                long cooldownMillis = cooldownSeconds * 1000L;
-
-                if (timePassed < cooldownMillis) {
-                    long timeLeft = (cooldownMillis - timePassed) / 1000;
-                    player.sendMessage(Component.text("Poczekaj jeszcze " + timeLeft + "s przed następnym użyciem!",
-                            NamedTextColor.RED));
-                    return;
-                }
-            }
-
-            // Always update timestamp after successful use
-            cooldowns.put(playerId, currentTime);
+        // Check cooldown using atomic operation
+        if (!tryAcquireCooldown(player)) {
+            return;
         }
 
         if (!consumeOneFireCharge(player)) {
@@ -170,10 +154,9 @@ public class CustomFireballListener implements Listener {
         }
 
         // Disable any default explosions on this fireball
-        if (fireball instanceof Explosive explosive) {
-            explosive.setYield(0.0f);
-            explosive.setIsIncendiary(false);
-        }
+        // LargeFireball always implements Explosive
+        fireball.setYield(0.0f);
+        fireball.setIsIncendiary(false);
 
         Location loc = fireball.getLocation();
         World world = loc.getWorld();
@@ -203,10 +186,7 @@ public class CustomFireballListener implements Listener {
      */
     @EventHandler(ignoreCancelled = true)
     public void onExplosionPrime(ExplosionPrimeEvent event) {
-        if (!(event.getEntity() instanceof Explosive)) {
-            return;
-        }
-
+        // LargeFireball always implements Explosive, no need to check separately
         if (!(event.getEntity() instanceof LargeFireball fireball)) {
             return;
         }
@@ -230,6 +210,40 @@ public class CustomFireballListener implements Listener {
     }
 
     /**
+     * Attempts to acquire cooldown for a player using atomic ConcurrentHashMap operation.
+     * Returns true if player can fire, false if still on cooldown.
+     * Thread-safe across Folia region threads.
+     * 
+     * @param player The player attempting to fire
+     * @return true if cooldown acquired successfully, false if on cooldown
+     */
+    private boolean tryAcquireCooldown(Player player) {
+        if (cooldownMillis <= 0) {
+            return true; // No cooldown configured
+        }
+
+        UUID playerId = player.getUniqueId();
+        long currentTime = System.currentTimeMillis();
+
+        // Atomic check-and-set using compute()
+        // This prevents race conditions between get() and put()
+        boolean[] canFire = {false};
+        cooldowns.compute(playerId, (uuid, lastUse) -> {
+            if (lastUse == null || (currentTime - lastUse) >= cooldownMillis) {
+                canFire[0] = true;
+                return currentTime; // Update timestamp
+            }
+            // Still on cooldown - keep old value
+            long timeLeft = (cooldownMillis - (currentTime - lastUse)) / 1000;
+            player.sendMessage(Component.text("Poczekaj jeszcze " + timeLeft + "s przed następnym użyciem!",
+                    NamedTextColor.RED));
+            return lastUse;
+        });
+
+        return canFire[0];
+    }
+
+    /**
      * Clean up all cooldowns.
      * MUST be called in onDisable() to prevent memory leaks on plugin reload.
      * 
@@ -243,6 +257,13 @@ public class CustomFireballListener implements Listener {
     }
 
     /**
+     * Reloads cached config values. Call after config reload.
+     */
+    public void reloadConfig() {
+        this.cooldownMillis = plugin.getConfig().getInt(COOLDOWN_SECONDS_CONFIG, 3) * 1000L;
+    }
+
+    /**
      * Remove expired cooldowns to prevent map from growing indefinitely.
      * Call this periodically if needed, but PlayerQuitEvent usually handles
      * cleanup.
@@ -251,13 +272,11 @@ public class CustomFireballListener implements Listener {
      * thread-safe.
      */
     public void removeExpiredCooldowns() {
-        int cooldownSeconds = plugin.getConfig().getInt(COOLDOWN_SECONDS_CONFIG, 3);
-        if (cooldownSeconds <= 0) {
+        if (cooldownMillis <= 0) {
             return; // No cooldowns enabled
         }
 
         long currentTime = System.currentTimeMillis();
-        long cooldownMillis = cooldownSeconds * 1000L;
         int removed = 0;
 
         // ConcurrentHashMap iterator is safe for concurrent modifications
@@ -322,15 +341,19 @@ public class CustomFireballListener implements Listener {
         Location eye = player.getEyeLocation();
         Vector direction = eye.getDirection().normalize();
 
-        // Offset spawn position in front of player to avoid self-damage
-        eye.add(direction.multiply(SPAWN_OFFSET));
+        // Clone direction for offset calculation - Vector.multiply() modifies in-place!
+        Vector offset = direction.clone().multiply(SPAWN_OFFSET);
+        eye.add(offset);
+
+        // Clone direction for velocity - original direction remains unmodified
+        Vector velocity = direction.clone().multiply(VELOCITY_MULTIPLIER);
 
         World world = player.getWorld();
         world.spawn(eye, LargeFireball.class, fb -> {
             fb.setShooter(player); // Assign shooter for damage/knockback attribution
             fb.setIsIncendiary(false); // Fireball itself won't ignite blocks
             fb.setYield(0.0f); // Disable default explosion
-            fb.setVelocity(direction.multiply(VELOCITY_MULTIPLIER));
+            fb.setVelocity(velocity);
 
             // Tag fireball using PersistentDataContainer
             PersistentDataContainer pdc = fb.getPersistentDataContainer();
@@ -351,23 +374,16 @@ public class CustomFireballListener implements Listener {
         });
     }
 
+    /**
+     * Attempts to fire a fireball from packet listener context.
+     * Uses the same cooldown logic as event-based firing.
+     * 
+     * @param player The player attempting to fire
+     */
     public void attemptFire(Player player) {
-        int cooldownSeconds = plugin.getConfig().getInt(COOLDOWN_SECONDS_CONFIG, 3);
-        if (cooldownSeconds > 0) {
-            UUID playerId = player.getUniqueId();
-            long currentTime = System.currentTimeMillis();
-            Long lastUse = cooldowns.get(playerId);
-            if (lastUse != null) {
-                long timePassed = currentTime - lastUse;
-                long cooldownMillis = cooldownSeconds * 1000L;
-                if (timePassed < cooldownMillis) {
-                    long timeLeft = (cooldownMillis - timePassed) / 1000;
-                    player.sendMessage(Component.text("Poczekaj jeszcze " + timeLeft + "s przed następnym użyciem!",
-                            NamedTextColor.RED));
-                    return;
-                }
-            }
-            cooldowns.put(playerId, currentTime);
+        // Use unified cooldown logic
+        if (!tryAcquireCooldown(player)) {
+            return;
         }
 
         if (!consumeOneFireCharge(player)) {
