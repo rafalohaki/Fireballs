@@ -25,6 +25,15 @@ import org.bukkit.plugin.Plugin;
 import org.bukkit.util.Vector;
 import org.rafalohaki.fireballs.Keys;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.entity.ItemSpawnEvent;
+import org.bukkit.event.inventory.CraftItemEvent;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.entity.Item;
+import org.bukkit.inventory.Inventory;
+import net.kyori.adventure.text.format.TextDecoration;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -63,11 +72,55 @@ public class CustomFireballListener implements Listener {
     // Cooldown time in milliseconds (cached from config)
     private volatile long cooldownMillis;
 
+    // Whether to rename Fire Charge items to custom name
+    private volatile boolean renameEnabled;
+
+    // Custom name for Fire Charge items (parsed from MiniMessage)
+    // Note: volatile is sufficient because Component is immutable - only reference assignment needs visibility
+    private volatile Component customFireballName;
+
+    // Cached explosion config values (read once, not on every explosion)
+    private volatile float explosionPower;
+    private volatile boolean explosionSetFire;
+    private volatile boolean explosionBreakBlocks;
+    private volatile int maxFlightTicks;
+
+    // Cached NamespacedKey for performance (avoid method call overhead)
+    private NamespacedKey cachedFireballKey;
+
+    // Default name if config parsing fails
+    private static final Component DEFAULT_FIREBALL_NAME = Component.text("Fireball", NamedTextColor.GOLD)
+            .decoration(TextDecoration.ITALIC, false);
+
     public CustomFireballListener(Plugin plugin) {
         this.plugin = plugin;
         this.keys = new Keys(plugin);
+        this.cachedFireballKey = keys.customFireballKey();
         this.cooldowns = new ConcurrentHashMap<>();
+        loadConfigValues();
+    }
+
+    /**
+     * Loads config values into cached fields.
+     */
+    private void loadConfigValues() {
         this.cooldownMillis = plugin.getConfig().getInt(COOLDOWN_SECONDS_CONFIG, 3) * 1000L;
+        this.renameEnabled = plugin.getConfig().getBoolean("rename-fire-charge", true);
+        
+        // Cache explosion and flight settings
+        this.explosionPower = (float) plugin.getConfig().getDouble("explosion-power", 4.0);
+        this.explosionSetFire = plugin.getConfig().getBoolean("set-fire", true);
+        this.explosionBreakBlocks = plugin.getConfig().getBoolean("break-blocks", false);
+        this.maxFlightTicks = plugin.getConfig().getInt(MAX_FLIGHT_TICKS_CONFIG, 80);
+        
+        String customNameStr = plugin.getConfig().getString("custom-name", "<gold>Fireball</gold>");
+        try {
+            this.customFireballName = MiniMessage.miniMessage().deserialize(customNameStr)
+                    .decoration(TextDecoration.ITALIC, false);
+        } catch (Exception e) {
+            plugin.getLogger().warning("Invalid custom-name in config, using default: " + e.getMessage());
+            this.customFireballName = DEFAULT_FIREBALL_NAME;
+        }
     }
 
     /**
@@ -146,10 +199,9 @@ public class CustomFireballListener implements Listener {
         }
 
         PersistentDataContainer pdc = fireball.getPersistentDataContainer();
-        NamespacedKey key = keys.customFireballKey();
 
-        // Check if this is our custom fireball
-        if (!pdc.has(key, PersistentDataType.BYTE)) {
+        // Check if this is our custom fireball (using cached key)
+        if (!pdc.has(cachedFireballKey, PersistentDataType.BYTE)) {
             return; // Not our fireball
         }
 
@@ -168,15 +220,8 @@ public class CustomFireballListener implements Listener {
         // Remove fireball before creating explosion
         fireball.remove();
 
-        // Read config values
-        float power = (float) plugin.getConfig().getDouble("explosion-power", 4.0);
-        boolean setFire = plugin.getConfig().getBoolean("set-fire", true);
-        boolean breakBlocks = plugin.getConfig().getBoolean("break-blocks", false);
-
-        // Create custom explosion with config values:
-        // - setFire: configurable (default: true)
-        // - breakBlocks: configurable (default: false)
-        loc.createExplosion(power, setFire, breakBlocks);
+        // Use cached config values (no config reads per explosion)
+        loc.createExplosion(explosionPower, explosionSetFire, explosionBreakBlocks);
     }
 
     /**
@@ -192,7 +237,7 @@ public class CustomFireballListener implements Listener {
         }
 
         PersistentDataContainer pdc = fireball.getPersistentDataContainer();
-        if (!pdc.has(keys.customFireballKey(), PersistentDataType.BYTE)) {
+        if (!pdc.has(cachedFireballKey, PersistentDataType.BYTE)) {
             return;
         }
 
@@ -207,6 +252,144 @@ public class CustomFireballListener implements Listener {
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
         cooldowns.remove(event.getPlayer().getUniqueId());
+    }
+
+    // ==================== FIRE CHARGE RENAMING ====================
+
+    /**
+     * Renames Fire Charge to custom name when crafted.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onCraftFireCharge(CraftItemEvent event) {
+        if (!renameEnabled) {
+            return;
+        }
+
+        ItemStack result = event.getRecipe().getResult();
+        if (result.getType() != Material.FIRE_CHARGE) {
+            return;
+        }
+
+        // Modify the result in the crafting inventory
+        ItemStack current = event.getCurrentItem();
+        if (current != null && current.getType() == Material.FIRE_CHARGE) {
+            renameToFireball(current);
+        }
+    }
+
+    /**
+     * Renames Fire Charge to custom name when it spawns in the world (drops).
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onItemSpawn(ItemSpawnEvent event) {
+        if (!renameEnabled) {
+            return;
+        }
+
+        Item item = event.getEntity();
+        ItemStack stack = item.getItemStack();
+
+        if (stack.getType() != Material.FIRE_CHARGE) {
+            return;
+        }
+
+        // Only rename if it doesn't have a custom name already
+        if (!stack.hasItemMeta() || !stack.getItemMeta().hasDisplayName()) {
+            renameToFireball(stack);
+            item.setItemStack(stack);
+        }
+    }
+
+    /**
+     * Renames Fire Charge to custom name when player interacts with inventory.
+     * Catches items from chests, hoppers, trading, etc.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onInventoryClick(InventoryClickEvent event) {
+        if (!renameEnabled) {
+            return;
+        }
+
+        ItemStack cursor = event.getCursor();
+        ItemStack current = event.getCurrentItem();
+
+        // Rename cursor item if it's an unnamed Fire Charge
+        if (shouldRenameItem(cursor)) {
+            renameToFireball(cursor);
+        }
+
+        // Rename clicked item if it's an unnamed Fire Charge
+        if (shouldRenameItem(current)) {
+            renameToFireball(current);
+        }
+    }
+
+    /**
+     * Renames all Fire Charges in player inventory when they join.
+     * This catches items that existed before the plugin was installed.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        if (!renameEnabled) {
+            return;
+        }
+
+        Player player = event.getPlayer();
+        renameAllFireChargesInInventory(player.getInventory());
+    }
+
+    /**
+     * Renames all Fire Charges when a container (chest, hopper, etc.) is opened.
+     * This catches items in chests that existed before the plugin was installed.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onInventoryOpen(InventoryOpenEvent event) {
+        if (!renameEnabled) {
+            return;
+        }
+
+        Inventory inventory = event.getInventory();
+        renameAllFireChargesInInventory(inventory);
+    }
+
+    /**
+     * Renames all Fire Charges in the given inventory.
+     * 
+     * @param inventory The inventory to scan and rename items in
+     */
+    private void renameAllFireChargesInInventory(Inventory inventory) {
+        for (ItemStack item : inventory.getContents()) {
+            if (shouldRenameItem(item)) {
+                renameToFireball(item);
+            }
+        }
+    }
+
+    /**
+     * Checks if an item should be renamed to Fireball.
+     * Returns true if item is a Fire Charge without custom name.
+     * Optimized to avoid double meta access.
+     */
+    private boolean shouldRenameItem(ItemStack item) {
+        if (item == null || item.getType() != Material.FIRE_CHARGE) {
+            return false;
+        }
+        // Optimized: single meta access instead of hasItemMeta() + getItemMeta()
+        var meta = item.getItemMeta();
+        return meta == null || !meta.hasDisplayName();
+    }
+
+    /**
+     * Renames a Fire Charge ItemStack to the configured custom name.
+     * 
+     * @param item The ItemStack to rename
+     */
+    private void renameToFireball(ItemStack item) {
+        if (item == null || item.getType() != Material.FIRE_CHARGE) {
+            return;
+        }
+        Component name = customFireballName;
+        item.editMeta(meta -> meta.displayName(name));
     }
 
     /**
@@ -260,7 +443,7 @@ public class CustomFireballListener implements Listener {
      * Reloads cached config values. Call after config reload.
      */
     public void reloadConfig() {
-        this.cooldownMillis = plugin.getConfig().getInt(COOLDOWN_SECONDS_CONFIG, 3) * 1000L;
+        loadConfigValues();
     }
 
     /**
@@ -355,21 +538,20 @@ public class CustomFireballListener implements Listener {
             fb.setYield(0.0f); // Disable default explosion
             fb.setVelocity(velocity);
 
-            // Tag fireball using PersistentDataContainer
+            // Tag fireball using PersistentDataContainer (using cached key)
             PersistentDataContainer pdc = fb.getPersistentDataContainer();
-            NamespacedKey key = keys.customFireballKey();
-            pdc.set(key, PersistentDataType.BYTE, (byte) 1);
+            pdc.set(cachedFireballKey, PersistentDataType.BYTE, (byte) 1);
 
-            // TTL protection - auto-remove after max flight time
-            int maxFlightTicks = plugin.getConfig().getInt(MAX_FLIGHT_TICKS_CONFIG, 80);
-            if (maxFlightTicks > 0) {
+            // TTL protection - auto-remove after max flight time (using cached value)
+            int flightTicks = maxFlightTicks; // Use cached config value
+            if (flightTicks > 0) {
                 // EntityScheduler is Folia-safe: always runs on entity's region thread
                 fb.getScheduler().runDelayed(plugin, task -> {
                     // Double-check: only remove if still alive and still our custom fireball
-                    if (!fb.isDead() && fb.isValid() && pdc.has(key, PersistentDataType.BYTE)) {
+                    if (!fb.isDead() && fb.isValid() && pdc.has(cachedFireballKey, PersistentDataType.BYTE)) {
                         fb.remove();
                     }
-                }, null, maxFlightTicks);
+                }, null, flightTicks);
             }
         });
     }

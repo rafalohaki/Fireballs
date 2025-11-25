@@ -23,3 +23,13 @@ cooldown-seconds: 3
 # 0 = brak limitu czasu (niezalecane)
 # Domyślnie: 80 ticków (4 sekundy)
 max-flight-ticks: 80
+
+# Czy zmieniać nazwę Fire Charge na "Fireball"
+# true = zmienia nazwę (domyślnie)
+# false = pozostawia oryginalną nazwę
+rename-fire-charge: true
+
+# Własna nazwa dla Fire Charge (wymaga rename-fire-charge: true)
+# Obsługuje kody kolorów MiniMessage, np. "<gold>Fireball</gold>"
+# Domyślnie: "<gold>Fireball</gold>"
+custom-name: "<gold>Fireball</gold>"
