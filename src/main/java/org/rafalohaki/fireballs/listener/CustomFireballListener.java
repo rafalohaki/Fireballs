@@ -62,6 +62,12 @@ public class CustomFireballListener implements Listener {
     // Cooldown tracking - ConcurrentHashMap for thread safety on Folia
     // Stores UUID -> timestamp of last use
     private final ConcurrentHashMap<UUID, Long> cooldowns;
+    
+    // Message cooldown to prevent spam (UUID -> last message timestamp)
+    private final ConcurrentHashMap<UUID, Long> messageCooldowns;
+    
+    // Minimum time between cooldown messages (ms) - prevents message spam/abuse
+    private static final long MESSAGE_COOLDOWN_MS = 1000L;
 
     // Initial velocity multiplier for the fireball
     private static final double VELOCITY_MULTIPLIER = 1.5;
@@ -98,6 +104,7 @@ public class CustomFireballListener implements Listener {
         this.keys = new Keys(plugin);
         this.cachedFireballKey = keys.customFireballKey();
         this.cooldowns = new ConcurrentHashMap<>();
+        this.messageCooldowns = new ConcurrentHashMap<>();
         loadConfigValues();
     }
 
@@ -252,7 +259,9 @@ public class CustomFireballListener implements Listener {
      */
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        cooldowns.remove(event.getPlayer().getUniqueId());
+        UUID playerId = event.getPlayer().getUniqueId();
+        cooldowns.remove(playerId);
+        messageCooldowns.remove(playerId);
     }
 
     // ==================== FIRE CHARGE RENAMING ====================
@@ -412,19 +421,45 @@ public class CustomFireballListener implements Listener {
         // Atomic check-and-set using compute()
         // This prevents race conditions between get() and put()
         boolean[] canFire = {false};
+        boolean[] shouldSendMessage = {false};
+        long[] timeLeftRef = {0};
+        
         cooldowns.compute(playerId, (uuid, lastUse) -> {
             if (lastUse == null || (currentTime - lastUse) >= cooldownMillis) {
                 canFire[0] = true;
                 return currentTime; // Update timestamp
             }
-            // Still on cooldown - keep old value
-            long timeLeft = (cooldownMillis - (currentTime - lastUse)) / 1000;
-            player.sendMessage(Component.text("Poczekaj jeszcze " + timeLeft + "s przed następnym użyciem!",
-                    NamedTextColor.RED));
+            // Still on cooldown - check if we should send message
+            // Round UP to avoid showing "0 seconds" when still on cooldown
+            long timeLeftMs = cooldownMillis - (currentTime - lastUse);
+            timeLeftRef[0] = (timeLeftMs + 999) / 1000; // Round up to nearest second
+            shouldSendMessage[0] = true;
             return lastUse;
         });
+        
+        // Send message outside of compute() to avoid blocking, with rate limiting
+        if (shouldSendMessage[0]) {
+            sendCooldownMessage(player, playerId, currentTime, timeLeftRef[0]);
+        }
 
         return canFire[0];
+    }
+    
+    /**
+     * Sends cooldown message with rate limiting to prevent spam abuse.
+     * Only sends message if at least MESSAGE_COOLDOWN_MS has passed since last message.
+     */
+    private void sendCooldownMessage(Player player, UUID playerId, long currentTime, long timeLeft) {
+        // Check if we can send a message (rate limited)
+        Long lastMessage = messageCooldowns.get(playerId);
+        if (lastMessage != null && (currentTime - lastMessage) < MESSAGE_COOLDOWN_MS) {
+            return; // Rate limited - don't spam
+        }
+        
+        // Update message timestamp and send
+        messageCooldowns.put(playerId, currentTime);
+        player.sendMessage(Component.text("Poczekaj jeszcze " + timeLeft + "s przed następnym użyciem!",
+                NamedTextColor.RED));
     }
 
     /**
@@ -434,8 +469,9 @@ public class CustomFireballListener implements Listener {
      * FOLIA SAFETY: This is called during plugin disable, safe to clear all data.
      */
     public void cleanup() {
-        int size = cooldowns.size();
+        int size = cooldowns.size() + messageCooldowns.size();
         cooldowns.clear();
+        messageCooldowns.clear();
         // S2629: Use built-in formatting instead of string concatenation
         plugin.getLogger().log(Level.INFO, "Cooldowns cleared: {0} entries removed", size);
     }
