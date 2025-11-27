@@ -30,10 +30,13 @@ import org.bukkit.event.inventory.CraftItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.entity.Item;
 import org.bukkit.inventory.Inventory;
 import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -92,8 +95,17 @@ public class CustomFireballListener implements Listener {
     private volatile boolean explosionBreakBlocks;
     private volatile int maxFlightTicks;
 
-    // Cached NamespacedKey for performance (avoid method call overhead)
+    // Cached NamespacedKeys for performance (avoid method call overhead)
     private NamespacedKey cachedFireballKey;
+    private NamespacedKey cachedShooterUuidKey;
+
+    // Kill message settings
+    private volatile boolean killMessageEnabled;
+    private volatile String killMessageFormat;
+    
+    // Cache for tracking explosion source (Location hash -> shooter UUID)
+    // Short-lived entries, cleaned up after explosion damage is processed
+    private final ConcurrentHashMap<Long, UUID> explosionSources;
 
     // Default name if config parsing fails
     private static final Component DEFAULT_FIREBALL_NAME = Component.text("Fireball", NamedTextColor.GOLD)
@@ -103,8 +115,10 @@ public class CustomFireballListener implements Listener {
         this.plugin = plugin;
         this.keys = new Keys(plugin);
         this.cachedFireballKey = keys.customFireballKey();
+        this.cachedShooterUuidKey = keys.shooterUuidKey();
         this.cooldowns = new ConcurrentHashMap<>();
         this.messageCooldowns = new ConcurrentHashMap<>();
+        this.explosionSources = new ConcurrentHashMap<>();
         loadConfigValues();
     }
 
@@ -129,6 +143,11 @@ public class CustomFireballListener implements Listener {
             plugin.getLogger().warning("Invalid custom-name in config, using default: " + e.getMessage());
             this.customFireballName = DEFAULT_FIREBALL_NAME;
         }
+        
+        // Load kill message settings
+        this.killMessageEnabled = plugin.getConfig().getBoolean("kill-message.enabled", true);
+        this.killMessageFormat = plugin.getConfig().getString("kill-message.format", 
+                "&8[&42b22&8] &7Gracz &c<killer> &7zabil gracza &c<victim> &7uzywajac &6fireball");
     }
 
     /**
@@ -225,11 +244,135 @@ public class CustomFireballListener implements Listener {
             return;
         }
 
+        // Track shooter for kill message before removing fireball
+        String shooterUuid = pdc.get(cachedShooterUuidKey, PersistentDataType.STRING);
+        if (shooterUuid != null && killMessageEnabled) {
+            long locKey = createLocationKey(loc);
+            UUID shooterId = UUID.fromString(shooterUuid);
+            explosionSources.put(locKey, shooterId);
+            
+            // Schedule cleanup after short delay (explosion damage is instant)
+            plugin.getServer().getGlobalRegionScheduler().runDelayed(plugin, 
+                    task -> explosionSources.remove(locKey), 5L); // 5 ticks = 250ms
+        }
+
         // Remove fireball before creating explosion
         fireball.remove();
 
         // Use cached config values (no config reads per explosion)
         loc.createExplosion(explosionPower, explosionSetFire, explosionBreakBlocks);
+    }
+
+    /**
+     * Creates a unique key for a location based on block coordinates.
+     * Used for short-lived explosion -> shooter tracking.
+     */
+    private long createLocationKey(Location loc) {
+        long x = loc.getBlockX();
+        long y = loc.getBlockY();
+        long z = loc.getBlockZ();
+        return (x & 0x3FFFFFFL) << 38 | (z & 0x3FFFFFFL) << 12 | (y & 0xFFFL);
+    }
+
+    /**
+     * Handles player death to send kill message if killed by custom fireball.
+     * Checks if the last damage was from an explosion near a tracked fireball location.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerDeath(PlayerDeathEvent event) {
+        if (!killMessageEnabled) {
+            return;
+        }
+
+        Player victim = event.getEntity();
+        EntityDamageEvent lastDamage = victim.getLastDamageCause();
+        
+        if (lastDamage == null) {
+            return;
+        }
+
+        // Check if death was from explosion
+        EntityDamageEvent.DamageCause cause = lastDamage.getCause();
+        if (cause != EntityDamageEvent.DamageCause.ENTITY_EXPLOSION 
+                && cause != EntityDamageEvent.DamageCause.BLOCK_EXPLOSION) {
+            return;
+        }
+
+        // Find the killer from tracked explosion sources
+        Location deathLoc = victim.getLocation();
+        UUID shooterId = findShooterNearLocation(deathLoc);
+        
+        if (shooterId == null) {
+            return;
+        }
+
+        // Don't show message for self-kills
+        if (shooterId.equals(victim.getUniqueId())) {
+            return;
+        }
+
+        Player killer = plugin.getServer().getPlayer(shooterId);
+        if (killer == null) {
+            return; // Killer offline
+        }
+
+        // Format and broadcast kill message
+        Component killMessage = formatKillMessage(killer.getName(), victim.getName());
+        plugin.getServer().broadcast(killMessage);
+        
+        // Optionally hide default death message
+        event.deathMessage(null);
+    }
+
+    /**
+     * Finds a shooter UUID from tracked explosions near the given location.
+     * Searches within explosion radius.
+     */
+    private UUID findShooterNearLocation(Location loc) {
+        // Check exact location first
+        long exactKey = createLocationKey(loc);
+        UUID shooter = explosionSources.get(exactKey);
+        if (shooter != null) {
+            return shooter;
+        }
+
+        // Search nearby locations (explosion can damage players within radius)
+        int searchRadius = (int) Math.ceil(explosionPower) + 1;
+        for (int dx = -searchRadius; dx <= searchRadius; dx++) {
+            for (int dy = -searchRadius; dy <= searchRadius; dy++) {
+                for (int dz = -searchRadius; dz <= searchRadius; dz++) {
+                    Location checkLoc = loc.clone().add(dx, dy, dz);
+                    long key = createLocationKey(checkLoc);
+                    shooter = explosionSources.get(key);
+                    if (shooter != null) {
+                        return shooter;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Formats the kill message with killer and victim names.
+     * Supports both MiniMessage format and legacy color codes (&amp;).
+     */
+    private Component formatKillMessage(String killerName, String victimName) {
+        String message = killMessageFormat
+                .replace("<killer>", killerName)
+                .replace("<victim>", victimName);
+        
+        // First try MiniMessage format, then fall back to legacy
+        if (message.contains("<") && message.contains(">")) {
+            try {
+                return MiniMessage.miniMessage().deserialize(message);
+            } catch (Exception e) {
+                // Fall through to legacy
+            }
+        }
+        
+        // Use legacy color codes (&7, &c, etc.)
+        return LegacyComponentSerializer.legacyAmpersand().deserialize(message);
     }
 
     /**
@@ -463,17 +606,18 @@ public class CustomFireballListener implements Listener {
     }
 
     /**
-     * Clean up all cooldowns.
+     * Clean up all cached data.
      * MUST be called in onDisable() to prevent memory leaks on plugin reload.
      * 
      * FOLIA SAFETY: This is called during plugin disable, safe to clear all data.
      */
     public void cleanup() {
-        int size = cooldowns.size() + messageCooldowns.size();
+        int size = cooldowns.size() + messageCooldowns.size() + explosionSources.size();
         cooldowns.clear();
         messageCooldowns.clear();
+        explosionSources.clear();
         // S2629: Use built-in formatting instead of string concatenation
-        plugin.getLogger().log(Level.INFO, "Cooldowns cleared: {0} entries removed", size);
+        plugin.getLogger().log(Level.INFO, "Cache cleared: {0} entries removed", size);
     }
 
     /**
@@ -578,6 +722,8 @@ public class CustomFireballListener implements Listener {
             // Tag fireball using PersistentDataContainer (using cached key)
             PersistentDataContainer pdc = fb.getPersistentDataContainer();
             pdc.set(cachedFireballKey, PersistentDataType.BYTE, (byte) 1);
+            // Store shooter UUID for kill message tracking
+            pdc.set(cachedShooterUuidKey, PersistentDataType.STRING, player.getUniqueId().toString());
 
             // TTL protection - auto-remove after max flight time (using cached value)
             int flightTicks = maxFlightTicks; // Use cached config value

@@ -33,3 +33,24 @@ rename-fire-charge: true
 # Obsługuje kody kolorów MiniMessage, np. "<gold>Fireball</gold>"
 # Domyślnie: "<gold>Fireball</gold>"
 custom-name: "<gold>Fireball</gold>"
+
+# ==================== WIADOMOŚĆ O ZABICIU ====================
+
+# Ustawienia wiadomości o zabiciu graczem używającym fireball
+kill-message:
+  # Czy pokazywać wiadomość o zabiciu
+  # true = pokazuje wiadomość (domyślnie)
+  # false = nie pokazuje wiadomości
+  enabled: true
+  
+  # Format wiadomości
+  # Dostępne placeholdery:
+  #   <killer> - nazwa gracza który zabił
+  #   <victim> - nazwa gracza który zginął
+  # 
+  # Obsługuje dwa formaty kolorów:
+  # 1. Legacy (&) - np. &7 (szary), &c (czerwony), &6 (złoty)
+  # 2. MiniMessage - np. <gray>, <red>, <gold>
+  #
+  # Domyślnie: "&8[&42b22&8] &7Gracz &c<killer> &7zabil gracza &c<victim> &7uzywajac &6fireball"
+  format: "&8[&42b22&8] &7Gracz &c<killer> &7zabil gracza &c<victim> &7uzywajac &6fireball"

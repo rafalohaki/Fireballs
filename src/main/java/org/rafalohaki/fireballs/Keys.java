@@ -10,12 +10,18 @@ import org.bukkit.plugin.Plugin;
 public final class Keys {
 
     private final NamespacedKey customFireballKey;
+    private final NamespacedKey shooterUuidKey;
 
     public Keys(Plugin plugin) {
         this.customFireballKey = new NamespacedKey(plugin, "custom_fireball");
+        this.shooterUuidKey = new NamespacedKey(plugin, "shooter_uuid");
     }
 
     public NamespacedKey customFireballKey() {
         return customFireballKey;
+    }
+
+    public NamespacedKey shooterUuidKey() {
+        return shooterUuidKey;
     }
 }
